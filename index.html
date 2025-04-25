@@ -1,0 +1,540 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Riverbed Congestion Predictor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map { height: 300px; }
+        #riverList::-webkit-scrollbar {
+            height: 8px;
+        }
+        #riverList::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        #riverList::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        #riverList::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        #suggestions::-webkit-scrollbar {
+            width: 8px;
+        }
+        #suggestions::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        #suggestions::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        #suggestions::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto p-4">
+        <nav class="bg-blue-600 text-white p-4 rounded-lg mb-6">
+            <ul class="flex space-x-4 justify-center">
+                <li><button id="homeBtn" class="font-semibold hover:underline">Home</button></li>
+                <li><button id="scheduleBtn" class="font-semibold hover:underline">Cleaning Schedule</button></li>
+            </ul>
+        </nav>
+
+        <div id="homePage" class="block">
+            <h1 class="text-2xl font-bold text-center mb-6">Riverbed Congestion Predictor</h1>
+            <div class="mb-4 relative">
+                <input id="citySearch" type="text" placeholder="Search city or state (e.g., Selangor, Kuala Lumpur)" class="w-full p-2 border rounded-lg">
+                <div id="suggestions" class="absolute w-full bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto hidden z-10"></div>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow mb-4">
+                <h2 class="text-lg font-semibold mb-2">Rivers in <span id="userLocation">Kuala Lumpur</span></h2>
+                <div id="riverList" class="flex overflow-x-auto space-x-4 pb-2"></div>
+            </div>
+            <div id="riverDetails" class="bg-white p-4 rounded-lg shadow mb-4 hidden">
+                <h2 class="text-lg font-semibold mb-2">Details for <span id="selectedRiverName"></span></h2>
+                <div class="mb-2">
+                    <h3 class="text-md font-semibold">Preventive Measures</h3>
+                    <ul id="selectedRiverMeasures" class="list-disc pl-5 mt-1"></ul>
+                </div>
+                <div>
+                    <h3 class="text-md font-semibold">Cleaning Schedule</h3>
+                    <p id="selectedRiverSchedule" class="mt-1"></p>
+                </div>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow mb-4">
+                <h2 class="text-lg font-semibold">River Locations</h2>
+                <div id="map" class="mt-2"></div>
+            </div>
+        </div>
+
+        <div id="schedulePage" class="hidden">
+            <h1 class="text-2xl font-bold text-center mb-6">Community Cleaning Schedule</h1>
+            <div class="mb-4">
+                <input id="scheduleCitySearch" type="text" placeholder="Filter by city or state (e.g., Selangor)" class="w-full p-2 border rounded-lg">
+            </div>
+            <div id="cleaningSchedule" class="bg-white p-4 rounded-lg shadow"></div>
+        </div>
+    </div>
+
+    <script>
+        const rivers = [
+            { name: "Perlis River", city: "Kangar", state: "Perlis", lat: 6.4400123, lon: 100.1898765, congestion: "Low", cleaningDate: "2025-05-01", measures: ["Monitor agricultural runoff in Kangar.", "Promote sustainable farming."] },
+            { name: "Arau River", city: "Arau", state: "Perlis", lat: 6.4279851, lon: 100.2679432, congestion: "Moderate", cleaningDate: "2025-05-05", measures: ["Conduct community clean-ups in Arau.", "Install debris traps."] },
+            { name: "Muda River", city: "Alor Setar", state: "Kedah", lat: 6.1178923, lon: 100.3598765, congestion: "Low", cleaningDate: "2025-05-25", measures: ["Monitor agricultural runoff in Kedah.", "Install silt fences near farms."] },
+            { name: "Kedah River", city: "Sungai Petani", state: "Kedah", lat: 5.6449872, lon: 100.4849321, congestion: "Moderate", cleaningDate: "2025-05-30", measures: ["Reduce urban runoff in Sungai Petani.", "Educate on waste disposal."] },
+            { name: "Kulim River", city: "Kulim", state: "Kedah", lat: 5.3629432, lon: 100.5598765, congestion: "Low", cleaningDate: "2025-06-01", measures: ["Plant vegetation along riverbanks in Kulim.", "Monitor industrial waste."] },
+            { name: "Perai River", city: "George Town", state: "Penang", lat: 5.3799871, lon: 100.3649323, congestion: "Moderate", cleaningDate: "2025-06-10", measures: ["Reduce industrial waste in Penang.", "Conduct bi-weekly clean-ups."] },
+            { name: "Pinang River", city: "Butterworth", state: "Penang", lat: 5.3979432, lon: 100.3639876, congestion: "High", cleaningDate: "2025-06-15", measures: ["Install trash booms in Butterworth.", "Monitor urban waste."] },
+            { name: "Mertajam River", city: "Bukit Mertajam", state: "Penang", lat: 5.3598765, lon: 100.4649321, congestion: "Low", cleaningDate: "2025-06-20", measures: ["Conduct clean-ups in Bukit Mertajam.", "Promote waste management."] },
+            { name: "Perak River", city: "Ipoh", state: "Perak", lat: 4.5919872, lon: 101.0829435, congestion: "Moderate", cleaningDate: "2025-05-20", measures: ["Monitor mining runoff in Ipoh.", "Install sediment traps."] },
+            { name: "Kinta River", city: "Taiping", state: "Perak", lat: 4.8479432, lon: 100.7298765, congestion: "Low", cleaningDate: "2025-05-25", measures: ["Plant vegetation along riverbanks in Taiping.", "Conduct clean-ups."] },
+            { name: "Kangsar River", city: "Kuala Kangsar", state: "Perak", lat: 4.7698765, lon: 100.9398213, congestion: "Moderate", cleaningDate: "2025-05-30", measures: ["Monitor agricultural runoff in Kuala Kangsar.", "Educate on waste disposal."] },
+            { name: "Klang River", city: "Kuala Lumpur", state: "Selangor", lat: 3.1492801, lon: 101.6964392, congestion: "High", cleaningDate: "2025-05-01", measures: ["Reduce urban runoff in Kuala Lumpur.", "Enforce industrial regulations."] },
+            { name: "Gombak River", city: "Petaling Jaya", state: "Selangor", lat: 3.1479432, lon: 101.6479876, congestion: "Moderate", cleaningDate: "2025-05-15", measures: ["Plant vegetation along riverbanks in Petaling Jaya.", "Monitor construction sites."] },
+            { name: "Selangor River", city: "Shah Alam", state: "Selangor", lat: 3.0698765, lon: 101.5149323, congestion: "Low", cleaningDate: "2025-06-01", measures: ["Implement sediment traps in Shah Alam.", "Promote sustainable farming."] },
+            { name: "Damansara River", city: "Subang Jaya", state: "Selangor", lat: 3.1279872, lon: 101.6179435, congestion: "Moderate", cleaningDate: "2025-06-05", measures: ["Reduce urban runoff in Subang Jaya.", "Conduct community clean-ups."] },
+            { name: "Klang River", city: "Klang", state: "Selangor", lat: 3.0298765, lon: 101.4479876, congestion: "High", cleaningDate: "2025-05-10", measures: ["Install sediment traps in Klang.", "Monitor industrial waste."] },
+            { name: "Sungai Sempit", city: "Klang", state: "Selangor", lat: 3.0281198, lon: 101.4402453, congestion: "Moderate", cleaningDate: "2025-06-01", measures: ["Monitor urban runoff in Klang.", "Conduct clean-ups."] },
+            { name: "Linggi River", city: "Seremban", state: "Negeri Sembilan", lat: 2.7198765, lon: 101.9349323, congestion: "Moderate", cleaningDate: "2025-05-20", measures: ["Monitor urban runoff in Seremban.", "Conduct clean-ups."] },
+            { name: "Port Dickson River", city: "Port Dickson", state: "Negeri Sembilan", lat: 2.5198765, lon: 101.7929876, congestion: "Low", cleaningDate: "2025-05-25", measures: ["Monitor tourism impact in Port Dickson.", "Promote waste management."] },
+            { name: "Nilai River", city: "Nilai", state: "Negeri Sembilan", lat: 2.8119872, lon: 101.7998765, congestion: "Moderate", cleaningDate: "2025-05-30", measures: ["Monitor industrial waste in Nilai.", "Conduct clean-ups."] },
+            { name: "Melaka River", city: "Malacca City", state: "Melaka", lat: 2.1939872, lon: 102.2379435, congestion: "High", cleaningDate: "2025-05-15", measures: ["Reduce tourism waste in Malacca City.", "Install trash booms."] },
+            { name: "Alor Gajah River", city: "Alor Gajah", state: "Melaka", lat: 2.3779432, lon: 102.2079876, congestion: "Low", cleaningDate: "2025-05-20", measures: ["Monitor agricultural runoff in Alor Gajah.", "Promote sustainable farming."] },
+            { name: "Johor River", city: "Johor Bahru", state: "Johor", lat: 1.4653492, lon: 103.7561837, congestion: "High", cleaningDate: "2025-05-30", measures: ["Install trash booms in Johor Bahru.", "Monitor urban waste."] },
+            { name: "Muar River", city: "Muar", state: "Johor", lat: 2.0489872, lon: 102.5649323, congestion: "Moderate", cleaningDate: "2025-06-01", measures: ["Monitor agricultural runoff in Muar.", "Conduct clean-ups."] },
+            { name: "Batu Pahat River", city: "Batu Pahat", state: "Johor", lat: 1.8519872, lon: 102.9298765, congestion: "Low", cleaningDate: "2025-06-05", measures: ["Promote sustainable farming in Batu Pahat.", "Monitor runoff."] },
+            { name: "Kluang River", city: "Kluang", state: "Johor", lat: 2.0279432, lon: 103.3179876, congestion: "Moderate", cleaningDate: "2025-06-10", measures: ["Monitor urban runoff in Kluang.", "Conduct clean-ups."] },
+            { name: "Pahang River", city: "Kuantan", state: "Pahang", lat: 3.8139872, lon: 103.3298765, congestion: "Moderate", cleaningDate: "2025-05-20", measures: ["Install debris barriers in Kuantan.", "Monitor logging activities."] },
+            { name: "Temerloh River", city: "Temerloh", state: "Pahang", lat: 3.4479432, lon: 102.4139876, congestion: "Low", cleaningDate: "2025-05-25", measures: ["Monitor agricultural runoff in Temerloh.", "Promote sustainable farming."] },
+            { name: "Bentong River", city: "Bentong", state: "Pahang", lat: 3.5198765, lon: 101.9039876, congestion: "Moderate", cleaningDate: "2025-05-30", measures: ["Monitor urban runoff in Bentong.", "Conduct clean-ups."] },
+            { name: "Terengganu River", city: "Kuala Terengganu", state: "Terengganu", lat: 5.3279432, lon: 103.1379876, congestion: "Moderate", cleaningDate: "2025-06-01", measures: ["Monitor fishing waste in Kuala Terengganu.", "Install trash booms."] },
+            { name: "Kemaman River", city: "Kemaman", state: "Terengganu", lat: 4.2298765, lon: 103.4139876, congestion: "Low", cleaningDate: "2025-06-05", measures: ["Monitor industrial waste in Kemaman.", "Promote waste management."] },
+            { name: "Dungun River", city: "Dungun", state: "Terengganu", lat: 4.7479432, lon: 103.4139876, congestion: "Moderate", cleaningDate: "2025-06-10", measures: ["Monitor urban runoff in Dungun.", "Conduct clean-ups."] },
+            { name: "Kelantan River", city: "Kota Bharu", state: "Kelantan", lat: 6.1298765, lon: 102.2359876, congestion: "Moderate", cleaningDate: "2025-06-15", measures: ["Monitor flooding in Kota Bharu.", "Install debris barriers."] },
+            { name: "Pasir Mas River", city: "Pasir Mas", state: "Kelantan", lat: 6.0479432, lon: 102.1298765, congestion: "Low", cleaningDate: "2025-06-20", measures: ["Monitor agricultural runoff in Pasir Mas.", "Promote sustainable farming."] },
+            { name: "Tumpat River", city: "Tumpat", state: "Kelantan", lat: 6.1979432, lon: 102.1639876, congestion: "Moderate", cleaningDate: "2025-06-25", measures: ["Monitor urban runoff in Tumpat.", "Conduct clean-ups."] },
+            { name: "Kinabatangan River", city: "Kota Kinabalu", state: "Sabah", lat: 5.9749323, lon: 116.1098765, congestion: "Moderate", cleaningDate: "2025-06-01", measures: ["Monitor tourism waste in Kota Kinabalu.", "Install trash booms."] },
+            { name: "Sandakan River", city: "Sandakan", state: "Sabah", lat: 5.8379432, lon: 118.1149323, congestion: "Low", cleaningDate: "2025-06-05", measures: ["Monitor logging activities in Sandakan.", "Promote conservation."] },
+            { name: "Tawau River", city: "Tawau", state: "Sabah", lat: 4.2419872, lon: 117.8889435, congestion: "Moderate", cleaningDate: "2025-06-10", measures: ["Monitor urban runoff in Tawau.", "Conduct clean-ups."] },
+            { name: "Sarawak River", city: "Kuching", state: "Sarawak", lat: 1.5569872, lon: 110.3419323, congestion: "Moderate", cleaningDate: "2025-06-01", measures: ["Monitor urban runoff in Kuching.", "Install trash booms."] },
+            { name: "Miri River", city: "Miri", state: "Sarawak", lat: 4.3969872, lon: 113.9889435, congestion: "Low", cleaningDate: "2025-06-05", measures: ["Monitor oil industry waste in Miri.", "Promote waste management."] },
+            { name: "Sibu River", city: "Sibu", state: "Sarawak", lat: 2.2849323, lon: 111.8279876, congestion: "Moderate", cleaningDate: "2025-06-10", measures: ["Monitor urban runoff in Sibu.", "Conduct clean-ups."] },
+            { name: "Bintulu River", city: "Bintulu", state: "Sarawak", lat: 3.1689872, lon: 113.0389435, congestion: "Low", cleaningDate: "2025-06-15", measures: ["Monitor industrial waste in Bintulu.", "Promote sustainable practices."] },
+            { name: "Klang River", city: "Kuala Lumpur", state: "Kuala Lumpur", lat: 3.1492801, lon: 101.6964392, congestion: "High", cleaningDate: "2025-05-01", measures: ["Reduce urban runoff in Kuala Lumpur.", "Enforce industrial regulations."] },
+            { name: "Putrajaya Lake", city: "Putrajaya", state: "Putrajaya", lat: 2.9409872, lon: 101.6859435, congestion: "Low", cleaningDate: "2025-06-01", measures: ["Monitor urban runoff in Putrajaya.", "Promote waste management."] },
+            { name: "Labuan River", city: "Victoria", state: "Labuan", lat: 5.2779432, lon: 115.2389876, congestion: "Moderate", cleaningDate: "2025-06-05", measures: ["Monitor urban runoff in Victoria.", "Conduct clean-ups."] }
+        ];
+
+        const citiesAndStates = [
+            "Kangar", "Arau", "Perlis", "Alor Setar", "Sungai Petani", "Kulim", "Kedah", "George Town", "Butterworth", "Bukit Mertajam", "Penang", "Ipoh", "Taiping", "Kuala Kangsar", "Perak", "Shah Alam", "Petaling Jaya", "Klang", "Subang Jaya", "Selangor", "Seremban", "Port Dickson", "Nilai", "Negeri Sembilan", "Malacca City", "Alor Gajah", "Melaka", "Johor Bahru", "Muar", "Batu Pahat", "Kluang", "Johor", "Kuantan", "Temerloh", "Bentong", "Pahang", "Kuala Terengganu", "Kemaman", "Dungun", "Terengganu", "Kota Bharu", "Pasir Mas", "Tumpat", "Kelantan", "Kota Kinabalu", "Sandakan", "Tawau", "Sabah", "Kuching", "Miri", "Sibu", "Bintulu", "Sarawak", "Kuala Lumpur", "Putrajaya", "Victoria", "Labuan"
+        ];
+
+        const cityCoordinates = {
+            "kangar": { lat: 6.4414, lon: 100.1986 }, "arau": { lat: 6.4300, lon: 100.2700 }, "perlis": { lat: 6.4414, lon: 100.1986 },
+            "alor setar": { lat: 6.1210, lon: 100.3648 }, "sungai petani": { lat: 5.6470, lon: 100.4877 }, "kulim": { lat: 5.3650, lon: 100.5618 }, "kedah": { lat: 6.1210, lon: 100.3648 },
+            "george town": { lat: 5.4164, lon: 100.3327 }, "butterworth": { lat: 5.3992, lon: 100.3660 }, "bukit mertajam": { lat: 5.3630, lon: 100.4667 }, "penang": { lat: 5.4164, lon: 100.3327 },
+            "ipoh": { lat: 4.5975, lon: 101.0901 }, "taiping": { lat: 4.8500, lon: 100.7333 }, "kuala kangsar": { lat: 4.7736, lon: 100.9410 }, "perak": { lat: 4.5975, lon: 101.0901 },
+            "shah alam": { lat: 3.0738, lon: 101.5183 }, "petaling jaya": { lat: 3.1126, lon: 101.6399 }, "klang": { lat: 3.0333, lon: 101.4500 }, "subang jaya": { lat: 3.0640, lon: 101.5851 }, "selangor": { lat: 3.0738, lon: 101.5183 },
+            "seremban": { lat: 2.7258, lon: 101.9381 }, "port dickson": { lat: 2.5228, lon: 101.7959 }, "nilai": { lat: 2.8140, lon: 101.8020 }, "negeri sembilan": { lat: 2.7258, lon: 101.9381 },
+            "malacca city": { lat: 2.1960, lon: 102.2400 }, "alor gajah": { lat: 2.3800, lon: 102.2100 }, "melaka": { lat: 2.1960, lon: 102.2400 },
+            "johor bahru": { lat: 1.4854, lon: 103.7558 }, "muar": { lat: 2.0442, lon: 102.5689 }, "batu pahat": { lat: 1.8548, lon: 102.9325 }, "kluang": { lat: 2.0300, lon: 103.3200 }, "johor": { lat: 1.4854, lon: 103.7558 },
+            "kuantan": { lat: 3.8167, lon: 103.3333 }, "temerloh": { lat: 3.4500, lon: 102.4167 }, "bentong": { lat: 3.5223, lon: 101.9068 }, "pahang": { lat: 3.8167, lon: 103.3333 },
+            "kuala terengganu": { lat: 5.3302, lon: 103.1408 }, "kemaman": { lat: 4.2333, lon: 103.4167 }, "dungun": { lat: 4.7500, lon: 103.4167 }, "terengganu": { lat: 5.3302, lon: 103.1408 },
+            "kota bharu": { lat: 6.1333, lon: 102.2386 }, "pasir mas": { lat: 6.0500, lon: 102.1333 }, "tumpat": { lat: 6.2000, lon: 102.1667 }, "kelantan": { lat: 6.1333, lon: 102.2386 },
+            "kota kinabalu": { lat: 5.9780, lon: 116.1120 }, "sandakan": { lat: 5.8402, lon: 118.1179 }, "tawau": { lat: 4.2448, lon: 117.8912 }, "sabah": { lat: 5.9780, lon: 116.1120 },
+            "kuching": { lat: 1.5598, lon: 110.3441 }, "miri": { lat: 4.3993, lon: 113.9916 }, "sibu": { lat: 2.2878, lon: 111.8305 }, "bintulu": { lat: 3.1713, lon: 113.0416 }, "sarawak": { lat: 1.5598, lon: 110.3441 },
+            "kuala lumpur": { lat: 3.1390, lon: 101.6869 }, "putrajaya": { lat: 2.9431, lon: 101.6887 }, "victoria": { lat: 5.2800, lon: 115.2417 }, "labuan": { lat: 5.2800, lon: 115.2417 }
+        };
+
+        const cityToState = {
+            "kangar": "Perlis", "arau": "Perlis", "perlis": "Perlis",
+            "alor setar": "Kedah", "sungai petani": "Kedah", "kulim": "Kedah", "kedah": "Kedah",
+            "george town": "Penang", "butterworth": "Penang", "bukit mertajam": "Penang", "penang": "Penang",
+            "ipoh": "Perak", "taiping": "Perak", "kuala kangsar": "Perak", "perak": "Perak",
+            "shah alam": "Selangor", "petaling jaya": "Selangor", "klang": "Selangor", "subang jaya": "Selangor", "selangor": "Selangor",
+            "seremban": "Negeri Sembilan", "port dickson": "Negeri Sembilan", "nilai": "Negeri Sembilan", "negeri sembilan": "Negeri Sembilan",
+            "malacca city": "Melaka", "alor gajah": "Melaka", "melaka": "Melaka",
+            "johor bahru": "Johor", "muar": "Johor", "batu pahat": "Johor", "kluang": "Johor", "johor": "Johor",
+            "kuantan": "Pahang", "temerloh": "Pahang", "bentong": "Pahang", "pahang": "Pahang",
+            "kuala terengganu": "Terengganu", "kemaman": "Terengganu", "dungun": "Terengganu", "terengganu": "Terengganu",
+            "kota bharu": "Kelantan", "pasir mas": "Kelantan", "tumpat": "Kelantan", "kelantan": "Kelantan",
+            "kota kinabalu": "Sabah", "sandakan": "Sabah", "tawau": "Sabah", "sabah": "Sabah",
+            "kuching": "Sarawak", "miri": "Sarawak", "sibu": "Sarawak", "bintulu": "Sarawak", "sarawak": "Sarawak",
+            "kuala lumpur": "Kuala Lumpur", "putrajaya": "Putrajaya", "victoria": "Labuan", "labuan": "Labuan"
+        };
+
+        const map = L.map("map").setView([3.1390, 101.6869], 13);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+
+        let selectedRiver = null;
+        let riverMarkers = {};
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        function interpolatePoints(p1, p2, cityCoord) {
+            const steps = 50; // Higher resolution (≈1-meter intervals)
+            let closestPoint = p1;
+            let minDistance = calculateDistance(cityCoord.lat, cityCoord.lon, p1.lat, p1.lon);
+
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                const lat = p1.lat + t * (p2.lat - p1.lat);
+                const lon = p1.lon + t * (p2.lon - p1.lon);
+                const distance = calculateDistance(cityCoord.lat, cityCoord.lon, lat, lon);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = { lat, lon };
+                }
+            }
+            return closestPoint;
+        }
+
+        function findClosestPointOnRiver(cityCoord, riverGeometry) {
+            let closestPoint = null;
+            let minDistance = Infinity;
+
+            for (let i = 0; i < riverGeometry.length - 1; i++) {
+                const p1 = riverGeometry[i];
+                const p2 = riverGeometry[i + 1];
+                const interpolatedPoint = interpolatePoints(p1, p2, cityCoord);
+                const distance = calculateDistance(cityCoord.lat, cityCoord.lon, interpolatedPoint.lat, interpolatedPoint.lon);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = interpolatedPoint;
+                }
+            }
+            return closestPoint || { lat: riverGeometry[0].lat, lon: riverGeometry[0].lon };
+        }
+
+        async function snapToCenterline(lat, lon, riverName, state) {
+            const overpassUrl = "https://overpass-api.de/api/interpreter";
+            const query = `
+                [out:json][timeout:3600];
+                area[name="${state}"][admin_level=4][boundary=administrative];
+                way["waterway"="river"]["name"="${riverName}"](area);
+                node(w);
+                out center;
+            `;
+            try {
+                const response = await fetch(overpassUrl, { method: "POST", body: query });
+                if (!response.ok) return { lat, lon };
+                const data = await response.json();
+                const nodes = data.elements.filter(el => el.type === "node");
+                if (nodes.length === 0) return { lat, lon };
+
+                let closestNode = null;
+                let minDistance = Infinity;
+                nodes.forEach(node => {
+                    const distance = calculateDistance(lat, lon, node.lat, node.lon);
+                    if (distance < minDistance && distance <= 3) { // Snap within 3 meters
+                        minDistance = distance;
+                        closestNode = { lat: node.lat, lon: node.lon };
+                    }
+                });
+                return closestNode || { lat, lon };
+            } catch (error) {
+                console.error("Centerline snapping error:", error.message);
+                return { lat, lon };
+            }
+        }
+
+        async function fetchCityAndRivers(city) {
+            const overpassUrl = "https://overpass-api.de/api/interpreter";
+            const cacheKey = `cityData_${city.toLowerCase()}`;
+            const cachedData = localStorage.getItem(cacheKey);
+
+            if (cachedData) {
+                console.log(`Using cached data for ${city}`);
+                return JSON.parse(cachedData);
+            }
+
+            try {
+                document.getElementById("riverList").innerHTML = "<p class='text-gray-500 p-2'>Loading...</p>";
+                let state = cityToState[city.toLowerCase()];
+                if (!state) state = city;
+                const cityCoord = cityCoordinates[city.toLowerCase()] || { lat: 3.1390, lon: 101.6869 };
+
+                const stateQuery = `
+                    [out:json][timeout:3600];
+                    area[name="${state}"][admin_level=4][boundary=administrative];
+                    way["waterway"="river"](area);
+                    out geom;
+                `;
+                const stateResponse = await fetch(overpassUrl, { method: "POST", body: stateQuery });
+                if (!stateResponse.ok) throw new Error(`State query failed: ${stateResponse.status}`);
+                const stateData = await stateResponse.json();
+
+                const osmRiversPromises = stateData.elements.map(async element => {
+                    const geometry = element.geometry.map(node => ({ lat: node.lat, lon: node.lon }));
+                    let closestPoint = findClosestPointOnRiver(cityCoord, geometry);
+                    closestPoint = await snapToCenterline(closestPoint.lat, closestPoint.lon, element.tags?.name || "Unnamed River", state);
+                    return {
+                        name: element.tags?.name || "Unnamed River",
+                        lat: closestPoint.lat,
+                        lon: closestPoint.lon
+                    };
+                });
+
+                const osmRivers = await Promise.all(osmRiversPromises);
+                console.log(`Rivers found for ${state}:`, osmRivers);
+
+                const matchedRivers = osmRivers.map(osmRiver => {
+                    const mockRiver = rivers.find(r => 
+                        r.name.toLowerCase() === osmRiver.name.toLowerCase() &&
+                        r.state.toLowerCase() === state.toLowerCase()
+                    );
+                    return mockRiver ? { ...mockRiver, lat: osmRiver.lat, lon: osmRiver.lon } : {
+                        name: osmRiver.name,
+                        city: city,
+                        state: state,
+                        lat: osmRiver.lat,
+                        lon: osmRiver.lon,
+                        congestion: "Unknown",
+                        cleaningDate: "N/A",
+                        measures: ["No specific measures available."]
+                    };
+                });
+
+                const uniqueRivers = Array.from(new Map(matchedRivers.map(river => [river.name, river])).values());
+                const result = { cityCoord, state, rivers: uniqueRivers };
+                localStorage.setItem(cacheKey, JSON.stringify(result));
+                return result;
+            } catch (error) {
+                console.error("Overpass API error:", error.message);
+                const cityCoord = cityCoordinates[city.toLowerCase()] || { lat: 3.1390, lon: 101.6869 };
+                let state = cityToState[city.toLowerCase()];
+                if (!state) state = city;
+                const fallbackRivers = rivers.filter(river => river.state.toLowerCase() === state.toLowerCase());
+                console.log(`Fallback rivers for ${state}:`, fallbackRivers);
+                const message = error.message.includes("429")
+                    ? "Rate limit exceeded. Using cached data or try again later."
+                    : "Error loading rivers due to Overpass API issues. Using fallback data. Try again later.";
+                document.getElementById("riverList").innerHTML = `<p class="text-red-500 p-2">${message}</p>`;
+                const uniqueFallbackRivers = Array.from(new Map(fallbackRivers.map(river => [river.name, river])).values());
+                return { cityCoord, state, rivers: uniqueFallbackRivers };
+            }
+        }
+
+        function showRiverDetails(river) {
+            const riverDetails = document.getElementById("riverDetails");
+            const selectedRiverName = document.getElementById("selectedRiverName");
+            const selectedRiverMeasures = document.getElementById("selectedRiverMeasures");
+            const selectedRiverSchedule = document.getElementById("selectedRiverSchedule");
+
+            riverDetails.classList.remove("hidden");
+            selectedRiverName.textContent = river.name;
+            selectedRiverMeasures.innerHTML = river.measures.map(measure => `<li>${measure}</li>`).join("");
+            selectedRiverSchedule.textContent = river.cleaningDate !== "N/A" 
+                ? `Community Cleaning: ${river.cleaningDate}` 
+                : "No cleaning scheduled.";
+
+            map.eachLayer(layer => {
+                if (layer instanceof L.Marker) map.removeLayer(layer);
+            });
+            riverMarkers = {};
+
+            const marker = L.marker([river.lat, river.lon])
+                .addTo(map)
+                .bindPopup(`${river.name}: ${river.congestion}`);
+            riverMarkers[river.name] = marker;
+            map.setView([river.lat, river.lon], 19); // Maximum zoom
+        }
+
+        function debounce(func, delay) {
+            let timeoutId;
+            return function (...args) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+
+        function updateSuggestions(input) {
+            const suggestions = document.getElementById("suggestions");
+            if (!input) {
+                suggestions.classList.add("hidden");
+                return;
+            }
+
+            const filtered = citiesAndStates.filter(item => item.toLowerCase().startsWith(input.toLowerCase()));
+            suggestions.innerHTML = filtered.length
+                ? filtered.map(item => `<div class="suggestion-item p-2 hover:bg-gray-200 cursor-pointer" data-value="${item}">${item}</div>`).join("")
+                : "<div class='p-2 text-gray-500'>No matches found</div>";
+            suggestions.classList.remove("hidden");
+
+            document.querySelectorAll(".suggestion-item").forEach(item => {
+                item.addEventListener("click", () => {
+                    document.getElementById("citySearch").value = item.getAttribute("data-value");
+                    suggestions.classList.add("hidden");
+                    debouncedUpdate(item.getAttribute("data-value"));
+                });
+            });
+        }
+
+        const homePage = document.getElementById("homePage");
+        const schedulePage = document.getElementById("schedulePage");
+        const homeBtn = document.getElementById("homeBtn");
+        const scheduleBtn = document.getElementById("scheduleBtn");
+
+        homeBtn.addEventListener("click", () => {
+            homePage.classList.remove("hidden");
+            schedulePage.classList.add("hidden");
+            updateHomePage();
+        });
+
+        scheduleBtn.addEventListener("click", () => {
+            homePage.classList.add("hidden");
+            schedulePage.classList.remove("hidden");
+            updateSchedulePage("");
+        });
+
+        async function updateHomePage(city = "Kuala Lumpur") {
+            const riverList = document.getElementById("riverList");
+            const riverDetails = document.getElementById("riverDetails");
+            const userLocation = document.getElementById("userLocation");
+
+            const { cityCoord, state, rivers: fetchedRivers } = await fetchCityAndRivers(city);
+            userLocation.textContent = state;
+            selectedRiver = null;
+            riverDetails.classList.add("hidden");
+
+            riverList.innerHTML = fetchedRivers.length
+                ? fetchedRivers.map(river => `
+                    <button class="river-btn flex-shrink-0 w-36 bg-gray-100 p-3 rounded-lg shadow hover:bg-gray-300 transition cursor-pointer focus:outline-none" data-river-name="${river.name}">
+                        <p class="font-semibold text-sm">${river.name}</p>
+                        <p class="text-xs text-gray-600">${river.congestion} Congestion</p>
+                    </button>
+                `).join("")
+                : "<p class='text-gray-500 p-2'>No rivers found in this state.</p>";
+
+            const riverButtons = document.querySelectorAll(".river-btn");
+            riverButtons.forEach(button => {
+                button.addEventListener("click", () => {
+                    const riverName = button.getAttribute("data-river-name");
+                    const river = fetchedRivers.find(r => r.name === riverName);
+                    if (river) {
+                        selectedRiver = river;
+                        showRiverDetails(river);
+                    }
+                });
+            });
+
+            map.eachLayer(layer => {
+                if (layer instanceof L.Marker) map.removeLayer(layer);
+            });
+            riverMarkers = {};
+            map.setView([cityCoord.lat, cityCoord.lon], 13);
+
+            const bounds = [];
+            fetchedRivers.forEach(river => {
+                const marker = L.marker([river.lat, river.lon])
+                    .addTo(map)
+                    .bindPopup(`${river.name}: ${river.congestion}`);
+                riverMarkers[river.name] = marker;
+                bounds.push([river.lat, river.lon]);
+            });
+
+            if (bounds.length > 0) map.fitBounds(bounds, { padding: [50, 50] });
+        }
+
+        function updateSchedulePage(city = "") {
+            const cleaningSchedule = document.getElementById("cleaningSchedule");
+            const filteredRivers = city
+                ? rivers.filter(river => river.city.toLowerCase() === city.toLowerCase() || river.state.toLowerCase() === city.toLowerCase())
+                : rivers;
+
+            cleaningSchedule.innerHTML = filteredRivers.length
+                ? filteredRivers.map(river => `
+                    <div class="mb-2">
+                        <strong>${river.name}</strong> (${river.city}, ${river.state})<br>
+                        Community Cleaning: ${river.cleaningDate}
+                    </div>
+                `).join("")
+                : "<p>No cleaning schedules found for this location.</p>";
+        }
+
+        const citySearch = document.getElementById("citySearch");
+        const debouncedUpdate = debounce(async (city) => {
+            if (city) await updateHomePage(city);
+            else await updateHomePage("Kuala Lumpur");
+        }, 500);
+
+        citySearch.addEventListener("input", (e) => {
+            const input = e.target.value.trim();
+            updateSuggestions(input);
+            debouncedUpdate(input);
+        });
+
+        document.addEventListener("click", (e) => {
+            const suggestions = document.getElementById("suggestions");
+            if (!citySearch.contains(e.target) && !suggestions.contains(e.target)) {
+                suggestions.classList.add("hidden");
+            }
+        });
+
+        const scheduleCitySearch = document.getElementById("scheduleCitySearch");
+        scheduleCitySearch.addEventListener("input", (e) => {
+            updateSchedulePage(e.target.value.trim());
+        });
+
+        updateHomePage();
+    </script>
+</body>
+</html>

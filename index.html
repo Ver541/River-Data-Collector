@@ -1,0 +1,697 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>River Monitoring Sample Dashboard</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- React and ReactDOM -->
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <!-- Babel for JSX -->
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Google Fonts for Poppins -->
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      background: linear-gradient(to bottom, #e0f7fa, #0288d1);
+      font-family: 'Poppins', sans-serif;
+    }
+    #map { height: 300px; }
+    #riverList.vertical {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    #riverList.horizontal {
+      overflow-x: auto;
+    }
+    #riverList.vertical::-webkit-scrollbar,
+    #suggestions::-webkit-scrollbar {
+      width: 8px;
+    }
+    #riverList.horizontal::-webkit-scrollbar {
+      height: 8px;
+    }
+    #riverList::-webkit-scrollbar-track,
+    #suggestions::-webkit-scrollbar-track {
+      background: #e0f7fa;
+      border-radius: 4px;
+    }
+    #riverList::-webkit-scrollbar-thumb,
+    #suggestions::-webkit-scrollbar-thumb {
+      background: #0288d1;
+      border-radius: 4px;
+    }
+    #riverList::-webkit-scrollbar-thumb:hover,
+    #suggestions::-webkit-scrollbar-thumb:hover {
+      background: #0277bd;
+    }
+    .river-btn {
+      transition: all 0.3s ease;
+      background: linear-gradient(to right, #b3e5fc, #e1f5fe);
+    }
+    .river-btn:hover:not(.highlighted) {
+      /* Hover effect removed to prevent overflow */
+    }
+    .river-btn.highlighted {
+      background: #87CEEB !important;
+      color: white !important;
+    }
+    .river-btn.highlighted p {
+      color: white !important;
+    }
+    .river-btn.highlighted .text-gray-600 {
+      color: white !important;
+    }
+    /* River flow animation for River Data section */
+    .river-flow {
+      position: relative;
+      overflow: hidden;
+    }
+    .river-flow::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 200%;
+      height: 100%;
+      background: linear-gradient(to right, transparent, rgba(33, 150, 243, 0.2), transparent);
+      animation: flow 4s linear infinite;
+      z-index: 0;
+    }
+    @keyframes flow {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .river-flow > * {
+      position: relative;
+      z-index: 1;
+    }
+    /* Section headers */
+    .section-header {
+      background: linear-gradient(to right, #0288d1, #4fc3f7);
+      color: white;
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem 0.5rem 0 0;
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="root" class="container mx-auto p-4"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Comprehensive river data with weather forecast
+    // Note: Coordinates updated for accuracy based on city locations and river features.
+    const rivers = [
+      { name: "Klang River", city: "Kuala Lumpur", state: "Kuala Lumpur", lat: 3.1493, lon: 101.6965, speed: "2.8 m/s", flowType: "Turbulent", flowDirection: "Southward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 5, month: "June", time: "Mid-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "80%", nextHeavyRain: "June 10, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "29°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Central bend", level: "High", dueDate: "June 12, 2025" }, predictionDate: "June 15, 2025", predictionProbability: "90%", predictionCause: "Heavy Rain" },
+      { name: "Gombak River", city: "Kuala Lumpur", state: "Kuala Lumpur", lat: 3.1493, lon: 101.6965, speed: "1.5 m/s", flowType: "Laminar", flowDirection: "Southward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Moderate", terrain: "Lowland", historicalFloods: { years: 5, month: "June", time: "Early-month", duration: "2 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "60%", nextHeavyRain: "June 11, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "29°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Northern stretch", level: "Moderate", dueDate: "June 15, 2025" }, predictionDate: "June 16, 2025", predictionProbability: "70%", predictionCause: "Storm" },
+      { name: "Johor River", city: "Johor Bahru", state: "Johor", lat: 1.4880, lon: 103.7530, speed: "2.5 m/s", flowType: "Turbulent", flowDirection: "Eastward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 5, month: "June", time: "Mid-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "85%", nextHeavyRain: "June 12, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "31°C", rainProbability: "80%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "33°C", rainProbability: "50%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "31°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Eastern bend", level: "High", dueDate: "June 14, 2025" }, predictionDate: "June 15, 2025", predictionProbability: "85%", predictionCause: "Storm" },
+      { name: "Muar River", city: "Muar", state: "Johor", lat: 2.0442, lon: 102.5689, speed: "2.3 m/s", flowType: "Turbulent", flowDirection: "Westward", waveFrequency: "4 waves/min", wavelength: "1.8 m", waterLevel: "Moderate", terrain: "Lowland", historicalFloods: { years: 4, month: "June", time: "Early-month", duration: "2 days", cause: "Storm" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "June 10, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "31°C", rainProbability: "80%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "33°C", rainProbability: "50%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "31°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "June 15, 2025" }, predictionDate: "June 12, 2025", predictionProbability: "60%", predictionCause: "Storm" },
+      { name: "Muda River", city: "Alor Setar", state: "Kedah", lat: 6.1184, lon: 100.3685, speed: "2.2 m/s", flowType: "Laminar", flowDirection: "Northward", waveFrequency: "4 waves/min", wavelength: "1.8 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 3, month: "July", time: "Mid-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "70%", nextHeavyRain: "July 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Southern bend", level: "Low", dueDate: "July 20, 2025" }, predictionDate: "July 18, 2025", predictionProbability: "50%", predictionCause: "Heavy Rain" },
+      { name: "Kedah River", city: "Alor Setar", state: "Kedah", lat: 6.1248, lon: 100.3648, speed: "2.7 m/s", flowType: "Turbulent", flowDirection: "Northward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "Moderate", terrain: "Lowland", historicalFloods: { years: 3, month: "July", time: "Late-month", duration: "4 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "75%", nextHeavyRain: "July 25, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Moderate", dueDate: "July 30, 2025" }, predictionDate: "July 28, 2025", predictionProbability: "65%", predictionCause: "Heavy Rain" },
+      { name: "Kelantan River", city: "Kota Bharu", state: "Kelantan", lat: 6.1254, lon: 102.2386, speed: "2.4 m/s", flowType: "Turbulent", flowDirection: "Eastward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 5, month: "November", time: "Late-month", duration: "5 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "90%", nextHeavyRain: "November 25, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "28°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "29°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 14, 2025", temp: "30°C", rainProbability: "30%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "29°C", rainProbability: "40%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "28°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Eastern bend", level: "High", dueDate: "November 30, 2025" }, predictionDate: "November 28, 2025", predictionProbability: "85%", predictionCause: "Heavy Rain" },
+      { name: "Galas River", city: "Gua Musang", state: "Kelantan", lat: 4.8833, lon: 101.9667, speed: "1.8 m/s", flowType: "Laminar", flowDirection: "Northward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Highland", historicalFloods: { years: 4, month: "November", time: "Mid-month", duration: "3 days", cause: "Storm" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "60%", nextHeavyRain: "November 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "27°C", rainProbability: "40%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "28°C", rainProbability: "30%", condition: "Sunny" },
+        { day: "May 14, 2025", temp: "29°C", rainProbability: "20%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "28°C", rainProbability: "30%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "27°C", rainProbability: "50%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "November 20, 2025" }, predictionDate: "November 18, 2025", predictionProbability: "40%", predictionCause: "Storm" },
+      { name: "Melaka River", city: "Malacca City", state: "Melaka", lat: 2.1896, lon: 102.2501, speed: "2.0 m/s", flowType: "Laminar", flowDirection: "Westward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 3, month: "December", time: "Early-month", duration: "2 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "December 5, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "December 10, 2025" }, predictionDate: "December 8, 2025", predictionProbability: "45%", predictionCause: "Heavy Rain" },
+      { name: "Linggi River", city: "Port Dickson", state: "Negeri Sembilan", lat: 2.4119, lon: 101.8462, speed: "2.5 m/s", flowType: "Turbulent", flowDirection: "Southward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 5, month: "December", time: "Mid-month", duration: "4 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "80%", nextHeavyRain: "December 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Southern bend", level: "High", dueDate: "December 20, 2025" }, predictionDate: "December 18, 2025", predictionProbability: "80%", predictionCause: "Storm" },
+      { name: "Pahang River", city: "Kuantan", state: "Pahang", lat: 3.8077, lon: 103.3260, speed: "2.3 m/s", flowType: "Laminar", flowDirection: "Eastward", waveFrequency: "4 waves/min", wavelength: "1.8 m", waterLevel: "Moderate", terrain: "Highland", historicalFloods: { years: 4, month: "January", time: "Mid-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "70%", nextHeavyRain: "January 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "28°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "29°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "29°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "28°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Moderate", dueDate: "January 20, 2025" }, predictionDate: "January 18, 2025", predictionProbability: "60%", predictionCause: "Heavy Rain" },
+      { name: "Tembeling River", city: "Jerantut", state: "Pahang", lat: 4.4167, lon: 102.3667, speed: "1.7 m/s", flowType: "Laminar", flowDirection: "Northward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Highland", historicalFloods: { years: 3, month: "January", time: "Early-month", duration: "2 days", cause: "Storm" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "January 5, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "27°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "28°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 14, 2025", temp: "29°C", rainProbability: "30%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "28°C", rainProbability: "40%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "27°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Northern stretch", level: "Low", dueDate: "January 10, 2025" }, predictionDate: "January 8, 2025", predictionProbability: "30%", predictionCause: "Storm" },
+      { name: "Pinang River", city: "George Town", state: "Penang", lat: 5.4164, lon: 100.3327, speed: "1.9 m/s", flowType: "Laminar", flowDirection: "Westward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 3, month: "August", time: "Mid-month", duration: "2 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "60%", nextHeavyRain: "August 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "August 20, 2025" }, predictionDate: "August 18, 2025", predictionProbability: "40%", predictionCause: "Heavy Rain" },
+      { name: "Prai River", city: "Seberang Perai", state: "Penang", lat: 5.3833, lon: 100.3833, speed: "2.4 m/s", flowType: "Turbulent", flowDirection: "Westward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 4, month: "August", time: "Late-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "80%", nextHeavyRain: "August 25, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Southern bend", level: "High", dueDate: "August 30, 2025" }, predictionDate: "August 28, 2025", predictionProbability: "75%", predictionCause: "Heavy Rain" },
+      { name: "Perak River", city: "Ipoh", state: "Perak", lat: 4.5975, lon: 101.0901, speed: "3.0 m/s", flowType: "Turbulent", flowDirection: "Westward", waveFrequency: "6 waves/min", wavelength: "2.5 m", waterLevel: "Moderate", terrain: "Highland", historicalFloods: { years: 3, month: "July", time: "Late-month", duration: "4 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "75%", nextHeavyRain: "July 25, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "30%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Southern bend", level: "Low", dueDate: "July 30, 2025" }, predictionDate: "July 28, 2025", predictionProbability: "65%", predictionCause: "Heavy Rain" },
+      { name: "Kinta River", city: "Ipoh", state: "Perak", lat: 4.5833, lon: 101.0833, speed: "2.0 m/s", flowType: "Laminar", flowDirection: "Westward", waveFrequency: "4 waves/min", wavelength: "1.8 m", waterLevel: "Low", terrain: "Highland", historicalFloods: { years: 4, month: "July", time: "Mid-month", duration: "2 days", cause: "Storm" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "July 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "30%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "July 20, 2025" }, predictionDate: "July 18, 2025", predictionProbability: "40%", predictionCause: "Storm" },
+      { name: "Perlis River", city: "Kangar", state: "Perlis", lat: 6.4414, lon: 100.1986, speed: "2.2 m/s", flowType: "Laminar", flowDirection: "Northward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 2, month: "October", time: "Early-month", duration: "2 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "October 5, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "October 10, 2025" }, predictionDate: "October 8, 2025", predictionProbability: "30%", predictionCause: "Heavy Rain" },
+      { name: "Kinabatangan River", city: "Sandakan", state: "Sabah", lat: 5.4204, lon: 118.0476, speed: "2.5 m/s", flowType: "Turbulent", flowDirection: "Eastward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "Moderate", terrain: "Lowland", historicalFloods: { years: 5, month: "February", time: "Mid-month", duration: "4 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "80%", nextHeavyRain: "February 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Eastern bend", level: "Moderate", dueDate: "February 20, 2025" }, predictionDate: "February 18, 2025", predictionProbability: "70%", predictionCause: "Heavy Rain" },
+      { name: "Labuk River", city: "Sandakan", state: "Sabah", lat: 5.8833, lon: 117.9167, speed: "1.6 m/s", flowType: "Laminar", flowDirection: "Eastward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 3, month: "February", time: "Early-month", duration: "2 days", cause: "Storm" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "February 5, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "February 10, 2025" }, predictionDate: "February 8, 2025", predictionProbability: "30%", predictionCause: "Storm" },
+      { name: "Rajang River", city: "Sibu", state: "Sarawak", lat: 2.2906, lon: 111.8258, speed: "2.9 m/s", flowType: "Turbulent", flowDirection: "Westward", waveFrequency: "6 waves/min", wavelength: "2.5 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 5, month: "January", time: "Late-month", duration: "5 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "90%", nextHeavyRain: "January 25, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "28°C", rainProbability: "80%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 14, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "29°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "28°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Western bend", level: "High", dueDate: "January 30, 2025" }, predictionDate: "January 28, 2025", predictionProbability: "85%", predictionCause: "Heavy Rain" },
+      { name: "Sarawak River", city: "Kuching", state: "Sarawak", lat: 1.5637, lon: 110.3445, speed: "2.0 m/s", flowType: "Laminar", flowDirection: "Westward", waveFrequency: "4 waves/min", wavelength: "1.8 m", waterLevel: "Moderate", terrain: "Lowland", historicalFloods: { years: 4, month: "January", time: "Mid-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "70%", nextHeavyRain: "January 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Moderate", dueDate: "January 20, 2025" }, predictionDate: "January 18, 2025", predictionProbability: "60%", predictionCause: "Heavy Rain" },
+      { name: "Selangor River", city: "Shah Alam", state: "Selangor", lat: 3.0738, lon: 101.5183, speed: "2.1 m/s", flowType: "Laminar", flowDirection: "Westward", waveFrequency: "3 waves/min", wavelength: "1.5 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 3, month: "November", time: "Early-month", duration: "2 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Moderate", rainProbability: "50%", nextHeavyRain: "November 5, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Low", dueDate: "November 10, 2025" }, predictionDate: "November 8, 2025", predictionProbability: "40%", predictionCause: "Heavy Rain" },
+      { name: "Klang River (Selangor)", city: "Klang", state: "Selangor", lat: 3.0333, lon: 101.4333, speed: "2.6 m/s", flowType: "Turbulent", flowDirection: "Westward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "High", terrain: "Lowland", historicalFloods: { years: 5, month: "November", time: "Mid-month", duration: "4 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "80%", nextHeavyRain: "November 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 13, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "32°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 15, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 16, 2025", temp: "30°C", rainProbability: "70%", condition: "Rainy" }
+      ], congestion: { location: "Southern bend", level: "High", dueDate: "November 20, 2025" }, predictionDate: "November 18, 2025", predictionProbability: "80%", predictionCause: "Heavy Rain" },
+      { name: "Terengganu River", city: "Kuala Terengganu", state: "Terengganu", lat: 5.3302, lon: 103.1408, speed: "2.2 m/s", flowType: "Laminar", flowDirection: "Eastward", waveFrequency: "4 waves/min", wavelength: "1.8 m", waterLevel: "Low", terrain: "Lowland", historicalFloods: { years: 4, month: "December", time: "Late-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "75%", nextHeavyRain: "December 25, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Central stretch", level: "Moderate", dueDate: "December 30, 2025" }, predictionDate: "December 28, 2025", predictionProbability: "65%", predictionCause: "Heavy Rain" },
+      { name: "Dungun River", city: "Dungun", state: "Terengganu", lat: 4.7563, lon: 103.3996, speed: "2.7 m/s", flowType: "Turbulent", flowDirection: "Eastward", waveFrequency: "5 waves/min", wavelength: "2 m", waterLevel: "Moderate", terrain: "Lowland", historicalFloods: { years: 3, month: "December", time: "Mid-month", duration: "3 days", cause: "Heavy Rain" }, weather: { season: "Monsoon", rainHeaviness: "Heavy", rainProbability: "70%", nextHeavyRain: "December 15, 2025" }, weatherForecast: [
+        { day: "May 12, 2025", temp: "29°C", rainProbability: "70%", condition: "Rainy" },
+        { day: "May 13, 2025", temp: "30°C", rainProbability: "60%", condition: "Cloudy" },
+        { day: "May 14, 2025", temp: "31°C", rainProbability: "50%", condition: "Cloudy" },
+        { day: "May 15, 2025", temp: "30°C", rainProbability: "40%", condition: "Sunny" },
+        { day: "May 16, 2025", temp: "29°C", rainProbability: "60%", condition: "Rainy" }
+      ], congestion: { location: "Southern bend", level: "Moderate", dueDate: "December 20, 2025" }, predictionDate: "December 18, 2025", predictionProbability: "60%", predictionCause: "Heavy Rain" }
+    ];
+
+    // All states, federal territories, and major cities in Malaysia
+    const citiesAndStates = [
+      "Kuala Lumpur", "Putrajaya", "Labuan",
+      "Johor", "Johor Bahru", "Muar", "Iskandar Puteri", "Pasir Gudang", "Kulai",
+      "Kedah", "Alor Setar", "Sungai Petani", "Kulim",
+      "Kelantan", "Kota Bharu", "Gua Musang",
+      "Melaka", "Malacca City",
+      "Negeri Sembilan", "Seremban", "Port Dickson",
+      "Pahang", "Kuantan", "Jerantut", "Bentong",
+      "Penang", "George Town", "Seberang Perai",
+      "Perak", "Ipoh", "Taiping", "Teluk Intan",
+      "Perlis", "Kangar",
+      "Sabah", "Kota Kinabalu", "Sandakan", "Tawau",
+      "Sarawak", "Kuching", "Miri", "Sibu",
+      "Selangor", "Shah Alam", "Petaling Jaya", "Klang", "Subang Jaya", "Ampang Jaya", "Selayang", "Kajang", "Sepang",
+      "Terengganu", "Kuala Terengganu", "Dungun"
+    ];
+
+    // Function to predict state or city based on input
+    const predictLocation = (input) => {
+      if (!input) return null;
+      const lowerInput = input.toLowerCase();
+      return citiesAndStates.find(location => location.toLowerCase().startsWith(lowerInput)) || null;
+    };
+
+    // Simulate ML-based congestion identification
+    const identifyCongestion = (river) => {
+      return `${river.congestion.location} (Level: ${river.congestion.level}, Due: ${river.congestion.dueDate})`;
+    };
+
+    // Simulate ML-based river speed calculation
+    const calculateRiverSpeed = (terrain, baseSpeed) => {
+      return terrain === "Highland" ? (parseFloat(baseSpeed) * 1.2).toFixed(1) + " m/s" : baseSpeed;
+    };
+
+    // Intro Screen Component with Animations
+    const IntroScreen = ({ onSearch, filteredRivers, onSelect, isVertical, toggleLayout }) => {
+      return (
+        <div className="text-center">
+          <h1 className="text-4xl font-bold text-cyan-600 animate-bounce mb-4">
+            Welcome to River Monitoring Dashboard
+          </h1>
+          <p className="text-lg text-gray-700 mb-6 animate-fade-in">
+            Select a river to view detailed monitoring data and flood predictions.
+          </p>
+          <SearchBar onSearch={onSearch} />
+          <RiverList rivers={filteredRivers} onSelect={onSelect} isVertical={isVertical} toggleLayout={toggleLayout} isIntro={true} selectedRiver={null} />
+        </div>
+      );
+    };
+
+    // Dashboard Component with Enhanced Data and River Flow Animation
+    const Dashboard = ({ riverData }) => {
+      const adjustedSpeed = calculateRiverSpeed(riverData.terrain, riverData.speed);
+      const congestionInfo = identifyCongestion(riverData);
+
+      return (
+        <div className="bg-white rounded-lg shadow-lg mb-6">
+          <h2 className="section-header text-2xl font-bold">River Data (Sample)</h2>
+          <div className="river-flow p-6">
+            <p className="text-lg text-gray-800">Speed: <span className="text-blue-600">{adjustedSpeed}</span> ({riverData.terrain} adjustment)</p>
+            <p className="text-lg text-gray-800">Flow Type: <span className="text-blue-600">{riverData.flowType}</span></p>
+            <p className="text-lg text-gray-800">Flow Direction: <span className="text-blue-600">{riverData.flowDirection}</span></p>
+            <p className="text-lg text-gray-800">Wave Frequency: <span className="text-blue-600">{riverData.waveFrequency}</span></p>
+            <p className="text-lg text-gray-800">Wavelength: <span className="text-blue-600">{riverData.wavelength}</span></p>
+            <p className="text-lg text-gray-800">Water Level: <span className="text-blue-600">{riverData.waterLevel}</span></p>
+            <p className="text-lg text-gray-800">Congestion: <span className="text-blue-600">{congestionInfo}</span></p>
+          </div>
+        </div>
+      );
+    };
+
+    // Prediction Card Component with Enhanced Predictions
+    const PredictionCard = ({ prediction }) => {
+      const historicalFloodText = `In the past ${prediction.historicalFloods.years} years, every ${prediction.historicalFloods.month} in ${prediction.city}, there’s a flood around ${prediction.historicalFloods.time} for ${prediction.historicalFloods.duration} due to ${prediction.historicalFloods.cause}.`;
+      const currentSituationText = `Given the current ${prediction.waterLevel.toLowerCase()} water level, a flood might occur again on ${prediction.predictionDate}.`;
+      const weatherText = `${prediction.weather.rainHeaviness} rain with ${prediction.weather.rainProbability} probability expected on ${prediction.weather.nextHeavyRain} during the ${prediction.weather.season.toLowerCase()} season, which might cause a flood.`;
+
+      return (
+        <div className="bg-white rounded-lg shadow-lg mb-6">
+          <h2 className="section-header text-2xl font-bold">Flood Prediction (Sample)</h2>
+          <div className="p-6">
+            <p className="text-lg text-gray-800">{historicalFloodText}</p>
+            <p className="text-lg text-gray-800">{currentSituationText}</p>
+            <p className="text-lg text-gray-800">Weather: <span className="text-blue-600">{weatherText}</span></p>
+          </div>
+        </div>
+      );
+    };
+
+    // Weather Forecast Component
+    const WeatherForecast = ({ riverData }) => {
+      return (
+        <div className="bg-white rounded-lg shadow-lg mb-6">
+          <h2 className="section-header text-2xl font-bold">5-Day Weather Forecast for {riverData.city}</h2>
+          <div className="p-6">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-blue-100">
+                    <th className="p-2 text-blue-700">Date</th>
+                    <th className="p-2 text-blue-700">Temperature</th>
+                    <th className="p-2 text-blue-700">Rain Probability</th>
+                    <th className="p-2 text-blue-700">Condition</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {riverData.weatherForecast.map((forecast, index) => (
+                    <tr key={index} className="border-b hover:bg-blue-50">
+                      <td className="p-2">{forecast.day}</td>
+                      <td className="p-2">{forecast.temp}</td>
+                      <td className="p-2">{forecast.rainProbability}</td>
+                      <td className="p-2">{forecast.condition}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Map Component with Improved Accuracy and Zoom
+    const MapView = ({ selectedRiver }) => {
+      const mapRef = React.useRef(null);
+
+      useEffect(() => {
+        const map = L.map('map').setView(
+          selectedRiver ? [selectedRiver.lat, selectedRiver.lon] : [4.2105, 101.9758],
+          selectedRiver ? 16 : 6 // Increased zoom level for selected river to 16 for better detail
+        );
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          maxZoom: 19, // Allow zooming in closer for better accuracy
+          tileSize: 256,
+          zoomOffset: 0
+        }).addTo(map);
+
+        map.eachLayer(layer => {
+          if (layer instanceof L.Marker) map.removeLayer(layer);
+        });
+
+        rivers.forEach(river => {
+          const waterLevelColor = river.waterLevel === "High" ? "red" : river.waterLevel === "Moderate" ? "yellow" : "green";
+          const iconUrl = `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${waterLevelColor}.png`;
+          const marker = L.marker([river.lat, river.lon], {
+            icon: L.icon({ iconUrl, iconSize: [25, 41], iconAnchor: [12, 41] })
+          })
+            .addTo(map)
+            .bindPopup(`${river.name} (Water Level: ${river.waterLevel}, Congestion: ${river.congestion.level} at ${river.congestion.location})`);
+          if (selectedRiver && river.name === selectedRiver.name) {
+            marker.setIcon(L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png', iconSize: [25, 41], iconAnchor: [12, 41] }));
+          }
+        });
+
+        mapRef.current = map;
+
+        return () => {
+          map.remove();
+        };
+      }, [selectedRiver]);
+
+      return (
+        <div className="bg-white rounded-lg shadow-lg">
+          <h2 className="section-header text-2xl font-bold">Water Level Map (Sample)</h2>
+          <div className="p-6">
+            <div id="map" className="h-96 w-full rounded-lg"></div>
+            <p className="text-sm text-gray-600 mt-2">
+              Note: Map accuracy depends on the quality of OpenStreetMap data. For better precision, consider using a local tile provider or a geocoding API to refine coordinates.
+            </p>
+          </div>
+        </div>
+      );
+    };
+
+    // River List Component with One-Time Toggle on Intro Screen and Highlighting
+    const RiverList = ({ rivers, onSelect, isVertical, toggleLayout, isIntro, selectedRiver }) => {
+      const getWaterLevelDotColor = (waterLevel) => {
+        return waterLevel === "High" ? "bg-red-500" : waterLevel === "Moderate" ? "bg-yellow-500" : "bg-green-500";
+      };
+
+      const handleRiverClick = (river) => {
+        if (isIntro && isVertical) {
+          toggleLayout();
+        }
+        onSelect(river);
+      };
+
+      return (
+        <div className="mb-4 relative">
+          {rivers.length === 0 ? (
+            <div className="text-center text-gray-600 font-semibold">
+              No river found in this location.
+            </div>
+          ) : (
+            <div
+              id="riverList"
+              className={`${
+                isVertical ? 'vertical flex flex-col space-y-2' : 'horizontal flex space-x-4 pb-2'
+              }`}
+            >
+              {rivers.map((river) => (
+                <button
+                  key={river.name}
+                  className={`river-btn ${
+                    isVertical ? 'w-full text-left' : 'flex-shrink-0 w-36'
+                  } p-3 rounded-lg shadow transition cursor-pointer focus:outline-none ${
+                    selectedRiver && selectedRiver.name === river.name ? 'highlighted' : ''
+                  }`}
+                  onClick={() => handleRiverClick(river)}
+                >
+                  <p className="font-semibold text-sm text-gray-800">{river.name}</p>
+                  <div className="flex items-center mt-1">
+                    <span className={`w-4 h-4 rounded-full ${getWaterLevelDotColor(river.waterLevel)} mr-2`}></span>
+                    <p className="text-xs text-gray-600">{river.waterLevel}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // Search Bar Component with Prediction
+    const SearchBar = ({ onSearch }) => {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [suggestions, setSuggestions] = useState([]);
+      const [predictedLocation, setPredictedLocation] = useState(null);
+
+      const handleInputChange = (e) => {
+        const value = e.target.value.trim();
+        setSearchTerm(value);
+
+        if (value) {
+          const filtered = citiesAndStates.filter(item =>
+            item.toLowerCase().startsWith(value.toLowerCase())
+          );
+          setSuggestions(filtered);
+
+          const prediction = predictLocation(value);
+          setPredictedLocation(prediction);
+        } else {
+          setSuggestions([]);
+          setPredictedLocation(null);
+        }
+        onSearch(value);
+      };
+
+      const handleSuggestionClick = (suggestion) => {
+        setSearchTerm(suggestion);
+        setSuggestions([]);
+        setPredictedLocation(suggestion);
+        onSearch(suggestion);
+      };
+
+      return (
+        <div className="mb-4 relative">
+          <input
+            id="citySearch"
+            type="text"
+            value={searchTerm}
+            onChange={handleInputChange}
+            placeholder="Search city or state (e.g., Kuala Lumpur, Selangor)"
+            className="w-full p-3 border border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          />
+          {suggestions.length > 0 && (
+            <div
+              id="suggestions"
+              className="absolute w-full bg-white border border-blue-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-10"
+            >
+              {suggestions.map((suggestion) => (
+                <div
+                  key={suggestion}
+                  className={`suggestion-item p-2 hover:bg-blue-100 cursor-pointer ${predictedLocation === suggestion ? 'bg-blue-50 font-bold' : ''}`}
+                  onClick={() => handleSuggestionClick(suggestion)}
+                >
+                  {suggestion} {predictedLocation === suggestion && <span className="text-blue-600 text-xs">(Predicted)</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // Main App Component
+    const App = () => {
+      const [filteredRivers, setFilteredRivers] = useState(rivers);
+      const [selectedRiver, setSelectedRiver] = useState(null);
+      const [isVertical, setIsVertical] = useState(true);
+      const [hasToggled, setHasToggled] = useState(false);
+
+      const handleSearch = (term) => {
+        if (term) {
+          const lowerTerm = term.toLowerCase();
+          const filtered = rivers.filter(river =>
+            river.city.toLowerCase().includes(lowerTerm) ||
+            river.state.toLowerCase().includes(lowerTerm)
+          );
+          setFilteredRivers(filtered);
+        } else {
+          setFilteredRivers(rivers);
+        }
+        if (!term) {
+          setSelectedRiver(null);
+        }
+      };
+
+      const handleRiverSelect = (river) => {
+        setSelectedRiver(river);
+      };
+
+      const toggleLayout = () => {
+        if (!hasToggled) {
+          setIsVertical(false);
+          setHasToggled(true);
+        }
+      };
+
+      return (
+        <div>
+          {!selectedRiver ? (
+            <IntroScreen
+              onSearch={handleSearch}
+              filteredRivers={filteredRivers}
+              onSelect={handleRiverSelect}
+              isVertical={isVertical}
+              toggleLayout={toggleLayout}
+            />
+          ) : (
+            <>
+              <h1 className="text-3xl font-bold text-center mb-6 text-cyan-600">River Monitoring Sample Dashboard</h1>
+              <SearchBar onSearch={handleSearch} />
+              <RiverList rivers={filteredRivers} onSelect={handleRiverSelect} isVertical={isVertical} toggleLayout={toggleLayout} isIntro={false} selectedRiver={selectedRiver} />
+              <Dashboard riverData={selectedRiver} />
+              <PredictionCard prediction={selectedRiver} />
+              <WeatherForecast riverData={selectedRiver} />
+              <MapView selectedRiver={selectedRiver} />
+            </>
+          )}
+        </div>
+      );
+    };
+
+    // Optional: Function to refine coordinates using a geocoding API (e.g., Nominatim)
+    // Uncomment and implement if needed for dynamic coordinate correction
+    /*
+    const refineCoordinates = async (riverName, city) => {
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${riverName}+${city}+Malaysia&format=json&limit=1`);
+        const data = await response.json();
+        if (data.length > 0) {
+          return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+        }
+      } catch (error) {
+        console.error(`Error refining coordinates for ${riverName}:`, error);
+      }
+      return null;
+    };
+    */
+
+    // Render the App
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

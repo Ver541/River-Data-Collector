@@ -61,6 +61,10 @@
   <!-- Google Fonts for Poppins -->
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Chart.js annotation plugin (MUST come after Chart.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.4.0"></script>
+  <!-- Your custom script (e.g. script.js or type=babel) -->
+  <script type="text/babel" src="script.js"></script>
   <style>
     body {
       background: linear-gradient(to bottom, #e0f7fa, #0288d1);
@@ -408,6 +412,7 @@
       xLabel: 'Time (s)',
       x: [5, 10, 15, 20, 25],
       y: [4.2, 5.0, 4.6, 4.9, 5.1],
+      threshold: 4.5,
       color: 'rgba(75,192,192,1)'
     },
     {
@@ -416,6 +421,7 @@
       xLabel: 'Time (s)',
       x: [5, 10, 15, 20, 25],
       y: [1, 1, 2, 3, 2],
+      threshold: 2,
       color: 'rgba(255,99,132,1)'
     },
     {
@@ -432,6 +438,7 @@
       xLabel: 'Time (s)',
       x: [5, 10, 15, 20, 25],
       y: [1.2, 1.5, 1.4, 1.3, 1.6],
+      threshold: 1.4,
       color: 'rgba(54,162,235,1)'
     },
     {
@@ -439,7 +446,8 @@
       label: 'Wavelength (m)',
       xLabel: 'Frequency (Hz)',
       x: [1, 2, 3, 4, 5],
-      y: [3.5, 3.2, 2.9, 2.6, 2.3], // λ = v/f, assume v = 3.5
+      y: [3.5, 3.2, 2.9, 2.6, 2.3],
+      threshold: 3.0,
       color: 'rgba(153,102,255,1)'
     },
     {
@@ -448,6 +456,7 @@
       xLabel: 'Time (s)',
       x: [5, 10, 15, 20, 25],
       y: [1.2, 1.3, 1.25, 1.4, 1.35],
+      threshold: 1.3,
       color: 'rgba(255,159,64,1)'
     },
     {
@@ -456,6 +465,7 @@
       xLabel: 'Distance from Source (m)',
       x: [0, 200, 400, 600, 800],
       y: [1, 2, 3, 2, 1],
+      threshold: 2,
       color: 'rgba(201,203,207,1)'
     }
   ];
@@ -463,6 +473,9 @@
   chartConfigs.forEach(cfg => {
     const ctx = document.getElementById(cfg.id);
     if (!ctx) return;
+
+    const hasThreshold = typeof cfg.threshold !== 'undefined';
+
     new Chart(ctx, {
       type: 'line',
       data: {
@@ -491,11 +504,29 @@
               text: cfg.label
             }
           }
-        }
+        },
+        plugins: hasThreshold ? {
+          annotation: {
+            annotations: {
+              thresholdLine: {
+                type: 'line',
+                yMin: cfg.threshold,
+                yMax: cfg.threshold,
+                borderColor: 'red',
+                borderWidth: 2,
+                borderDash: [6, 6],
+                label: {
+                  enabled: false // no text on threshold line
+                }
+              }
+            }
+          }
+        } : {}
       }
     });
   });
 }, []);
+
 
 
 
@@ -526,22 +557,25 @@
 
     // Prediction Card Component with Enhanced Predictions
     const PredictionCard = ({ prediction }) => {
-      const historicalFloodText = `In the past ${prediction.historicalFloods.years} years, every ${prediction.historicalFloods.month} in ${prediction.city}, there’s a flood around ${prediction.historicalFloods.time} for ${prediction.historicalFloods.duration} due to ${prediction.historicalFloods.cause}.`;
-      const currentSituationText = `Given the current ${prediction.waterLevel.toLowerCase()} water level, a flood might occur again on ${prediction.predictionDate}.`;
-      const weatherText = `${prediction.weather.rainHeaviness} rain with ${prediction.weather.rainProbability} probability expected on ${prediction.weather.nextHeavyRain} during the ${prediction.weather.season.toLowerCase()} season, which might cause a flood.`;
+  const historicalFloodText = `In the past ${prediction.historicalFloods.years} years, every ${prediction.historicalFloods.month} in ${prediction.city}, there’s typically a flood around ${prediction.historicalFloods.time} for about ${prediction.historicalFloods.duration}, primarily due to ${prediction.historicalFloods.cause}.`;
 
-      return (
-        <div className="bg-white rounded-lg shadow-lg mb-6">
-          <h2 className="section-header text-2xl font-bold">Flood Prediction (Sample)</h2>
-          <div className="p-6">
-            <p className="text-lg text-gray-800">{historicalFloodText}</p>
-            <p className="text-lg text-gray-800">{currentSituationText}</p>
-            <p className="text-lg text-gray-800">Weather: <span className="text-blue-600">{weatherText}</span></p>
-          </div>
-        </div>
-      );
-    };
+  const currentSituationText = `Current river conditions raise concern: with a speed of ${prediction.speed} nearing hazardous flow rates, a flow type of "${prediction.flowType}" indicating unstable current patterns, and a water level measured at ${prediction.waterLevel} — which is at or above the danger threshold — the chances of overflow are significantly elevated. Moreover, congestion levels reaching ${prediction.congestion.level} suggest obstructed flow, increasing upstream water pressure and risk.`;
 
+  const weatherText = `Forecasts predict ${prediction.weather.rainHeaviness} rain with ${prediction.weather.rainProbability} probability on ${prediction.predictionDate}, occurring during the ${prediction.weather.season.toLowerCase()} season. These conditions could lead to saturation of the riverbanks and exacerbate flow instability.`;
+  const predictionText = `Given these river dynamics and weather conditions, a flood event may occur as early as ${prediction.predictionDate}. Immediate attention to these factors is advised.`;
+
+  return (
+    <div className="bg-white rounded-lg shadow-lg mb-6">
+      <h2 className="section-header text-2xl font-bold">Flood Prediction (Sample)</h2>
+      <div className="p-6">
+        <p className="text-lg text-gray-800">{historicalFloodText}</p>
+        <p className="text-lg text-gray-800">{currentSituationText}</p>
+        <p className="text-lg text-gray-800">Weather: <span className="text-blue-600">{weatherText}</span></p>
+        <p className="text-lg text-red-700 font-semibold mt-2">{predictionText}</p>
+      </div>
+    </div>
+  );
+};
     // Weather Forecast Component
     const WeatherForecast = ({ riverData }) => {
       const chartRef = React.useRef(null);

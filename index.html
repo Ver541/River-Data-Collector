@@ -1,3 +1,5 @@
+
+
 <script type="text/javascript">
         var gk_isXlsx = false;
         var gk_xlsxFileLookup = {};
@@ -37,7 +39,9 @@
         }
         return gk_fileData[filename] || "";
         }
-        </script><!DOCTYPE html>
+        </script>
+        
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -56,6 +60,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <!-- Google Fonts for Poppins -->
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
       background: linear-gradient(to bottom, #e0f7fa, #0288d1);
@@ -111,6 +116,7 @@
     .river-flow {
       position: relative;
       overflow: hidden;
+      background-color: rgba(33, 150, 243, 0.2);
     }
     .river-flow::before {
       content: '';
@@ -119,8 +125,8 @@
       left: 0;
       width: 200%;
       height: 100%;
-      background: linear-gradient(to right, transparent, rgba(33, 150, 243, 0.2), transparent);
-      animation: flow 4s linear infinite;
+      background: linear-gradient(to right, transparent, rgba(33, 150, 243, 0.2), rgba(33, 150, 243, 0.2),rgba(33, 150, 243, 0.2),rgba(33, 150, 243, 0.2), transparent);
+      animation: flow 6s linear infinite;
       z-index: 0;
     }
     @keyframes flow {
@@ -138,8 +144,19 @@
       padding: 0.5rem 1rem;
       border-radius: 0.5rem 0.5rem 0 0;
     }
+
+    p#riverData {
+      padding: 2.5rem;
+    }
+
+    canvas {
+    max-width: 70%;
+    height: 400px;
+    margin: auto;
+    display: block;
+  }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
 </head>
 <body class="min-h-screen">
   <div id="root" class="container mx-auto p-4"></div>
@@ -383,21 +400,65 @@
       const adjustedSpeed = calculateRiverSpeed(riverData.terrain, riverData.speed);
       const congestionInfo = identifyCongestion(riverData);
 
+      useEffect(() => {
+  const chartConfigs = [
+    { id: 'chart-speed', label: 'Speed (m/s)', data: [2.1, 2.3, 2.5, 2.4, 2.6], color: 'rgba(75,192,192,1)' },
+    { id: 'chart-flowType', label: 'Flow Type (scale)', data: [1, 2, 2, 3, 2], color: 'rgba(255,99,132,1)' },
+    { id: 'chart-flowDirection', label: 'Flow Direction (°)', data: [15, 20, 25, 22, 18], color: 'rgba(255,206,86,1)' },
+    { id: 'chart-waveFrequency', label: 'Wave Frequency (Hz)', data: [4, 5, 4, 3, 5], color: 'rgba(54,162,235,1)' },
+    { id: 'chart-wavelength', label: 'Wavelength (m)', data: [1.5, 1.6, 1.7, 1.6, 1.8], color: 'rgba(153,102,255,1)' },
+    { id: 'chart-waterLevel', label: 'Water Level (m)', data: [1.0, 1.2, 1.3, 1.1, 1.2], color: 'rgba(255,159,64,1)' },
+    { id: 'chart-congestion', label: 'Congestion Level (1-3)', data: [1, 2, 3, 2, 1], color: 'rgba(201,203,207,1)' }
+  ];
+
+  chartConfigs.forEach(cfg => {
+    const ctx = document.getElementById(cfg.id);
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: ['T1', 'T2', 'T3', 'T4', 'T5'],
+        datasets: [{
+          label: cfg.label,
+          data: cfg.data,
+          borderColor: cfg.color,
+          tension: 0.3,
+          fill: false
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: { y: { beginAtZero: true } }
+      }
+    });
+  });
+}, []);
+
+
       return (
         <div className="bg-white rounded-lg shadow-lg mb-6">
           <h2 className="section-header text-2xl font-bold">River Data (Sample)</h2>
           <div className="river-flow p-6">
-            <p className="text-lg text-gray-800">Speed: <span className="text-blue-600">{adjustedSpeed}</span> ({riverData.terrain} adjustment)</p>
-            <p className="text-lg text-gray-800">Flow Type: <span className="text-blue-600">{riverData.flowType}</span></p>
-            <p className="text-lg text-gray-800">Flow Direction: <span className="text-blue-600">{riverData.flowDirection}</span></p>
-            <p className="text-lg text-gray-800">Wave Frequency: <span className="text-blue-600">{riverData.waveFrequency}</span></p>
-            <p className="text-lg text-gray-800">Wavelength: <span className="text-blue-600">{riverData.wavelength}</span></p>
-            <p className="text-lg text-gray-800">Water Level: <span className="text-blue-600">{riverData.waterLevel}</span></p>
-            <p className="text-lg text-gray-800">Congestion: <span className="text-blue-600">{congestionInfo}</span></p>
+            <p id="riverData" className="text-lg text-gray-800">Speed: <span className="text-blue-700">{adjustedSpeed}</span> ({riverData.terrain} adjustment)</p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-speed"></canvas></div>
+            <p id="riverData" className="text-lg text-gray-800">Flow Type: <span className="text-blue-700">{riverData.flowType}</span></p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-flowType"></canvas></div>
+            <p id="riverData"className="text-lg text-gray-800">Flow Direction: <span className="text-blue-700">{riverData.flowDirection}</span></p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-flowDirection"></canvas></div>
+            <p id="riverData"className="text-lg text-gray-800">Wave Frequency: <span className="text-blue-700">{riverData.waveFrequency}</span></p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-waveFrequency"></canvas></div>
+            <p id="riverData"className="text-lg text-gray-800">Wavelength: <span className="text-blue-700">{riverData.wavelength}</span></p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-wavelength"></canvas></div>
+            <p id="riverData"className="text-lg text-gray-800">Water Level: <span className="text-blue-700">{riverData.waterLevel}</span></p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-waterLevel"></canvas></div>
+            <p id="riverData"className="text-lg text-gray-800">Congestion: <span className="text-blue-700">{congestionInfo}</span></p>
+            <div class="bg-white rounded-lg shadow p-4"><canvas id="chart-congestion"></canvas></div>
           </div>
         </div>
       );
     };
+    
+    
 
     // Prediction Card Component with Enhanced Predictions
     const PredictionCard = ({ prediction }) => {
@@ -715,7 +776,7 @@
 
     // Optional: Function to refine coordinates using a geocoding API (e.g., Nominatim)
     // Uncomment and implement if needed for dynamic coordinate correction
-    /*
+    
     const refineCoordinates = async (riverName, city) => {
       try {
         const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${riverName}+${city}+Malaysia&format=json&limit=1`);
@@ -728,7 +789,7 @@
       }
       return null;
     };
-    */
+  
 
     // Render the App
     const root = ReactDOM.createRoot(document.getElementById('root'));
